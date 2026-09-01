@@ -65,6 +65,27 @@ struct Args {
 
 static CHILD_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
+/// Starts one end-to-end latency probe per validator for the load window.
+fn spawn_probes(
+    ers: &[ErHandle],
+    shards: &[Arc<Shard>],
+    stats: &[Arc<stats::ShardStats>],
+    stop: &Arc<AtomicBool>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    ers.iter()
+        .zip(shards)
+        .zip(stats)
+        .map(|((er, shard), stats)| {
+            tokio::spawn(load::latency_probe(
+                er.rpc_url(),
+                shard.clone(),
+                stats.clone(),
+                stop.clone(),
+            ))
+        })
+        .collect()
+}
+
 fn register_pid(pid: u32) {
     if let Ok(mut pids) = CHILD_PIDS.lock() {
         pids.push(pid);
@@ -244,6 +265,7 @@ async fn run(args: Args) -> Result<()> {
             .collect::<Result<_>>()?;
 
             state.set_phase("load", &format!("blasting pre-signed transfers at {n} validator(s)"));
+            let probes = spawn_probes(&ers, &shards, &shard_stats, &stop);
             let start = Instant::now();
             let results = join_all(ers.iter().zip(batches).zip(&shard_stats).map(
                 |((er, txs), stats)| {
@@ -260,6 +282,7 @@ async fn run(args: Args) -> Result<()> {
             let elapsed = start.elapsed().as_secs_f64();
             stop.store(true, Ordering::Relaxed);
             let _ = sampler.await;
+            join_all(probes).await;
             for r in results {
                 r?;
             }
@@ -271,6 +294,7 @@ async fn run(args: Args) -> Result<()> {
                 batch_size: args.batch_size,
                 signer_threads: args.signer_threads,
             };
+            let probes = spawn_probes(&ers, &shards, &shard_stats, &stop);
             let start = Instant::now();
             let results = join_all(ers.iter().zip(&shards).zip(&shard_stats).map(
                 |((er, shard), stats)| {
@@ -287,6 +311,7 @@ async fn run(args: Args) -> Result<()> {
             let elapsed = start.elapsed().as_secs_f64();
             stop.store(true, Ordering::Relaxed);
             let _ = sampler.await;
+            join_all(probes).await;
             for r in results {
                 r?;
             }
@@ -321,6 +346,12 @@ async fn run(args: Args) -> Result<()> {
             changed_pairs += changed;
         }
 
+        let latency: Vec<f64> = shard_stats
+            .iter()
+            .flat_map(|s| s.latency_samples())
+            .collect();
+        let latency = stats::latency_summary(&latency);
+
         let accepted: u64 = shard_stats.iter().map(|s| s.accepted()).sum();
         let submitted: u64 = shard_stats.iter().map(|s| s.submitted()).sum();
         // Prefer the server-side executed count: client acceptance overcounts
@@ -335,11 +366,16 @@ async fn run(args: Args) -> Result<()> {
             verified_pairs: ok_pairs,
             failed_pairs,
             changed_pairs,
+            latency_avg_ms: latency.map(|(avg, _)| avg),
+            latency_p99_ms: latency.map(|(_, p99)| p99),
         };
         let line = format!(
-            "validators={n} tps={tps:.0} per_node={:.0} accepted={accepted}/{submitted} executed={} pairs_ok={ok_pairs} pairs_failed={failed_pairs} pairs_active={changed_pairs}",
+            "validators={n} tps={tps:.0} per_node={:.0} accepted={accepted}/{submitted} executed={} pairs_ok={ok_pairs} pairs_failed={failed_pairs} pairs_active={changed_pairs} latency={}",
             point.per_node_tps,
             executed.map_or("n/a".to_string(), |e| e.to_string()),
+            latency.map_or("n/a".to_string(), |(avg, p99)| format!(
+                "{avg:.1}ms avg / {p99:.1}ms p99"
+            )),
         );
         println!("[result] {line}");
         report_lines.push(line);

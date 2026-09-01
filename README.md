@@ -1,17 +1,18 @@
 # er-usdc-scaling-poc
 
 **Can ephemeral rollups reach 1M TPS for USDC transfers?** This PoC answers
-empirically: a single MagicBlock ephemeral validator executes **~105k
-USDC-transfer TPS end-to-end**, ephemeral validators share no state and no
-consensus, and users shard cleanly across them — so **1M TPS ≈ 10 validators**
-with payment cohorts distributed across the fleet.
+empirically: a single MagicBlock ephemeral validator executes **~100k
+USDC-transfer TPS end-to-end** (sub-millisecond latency below saturation),
+ephemeral validators share no state and no consensus, and users shard cleanly
+across them — so **1M TPS ≈ 10–11 validators** with payment cohorts
+distributed across the fleet.
 
 ![Dashboard](docs/dashboard.jpg)
 
 ## Quickstart
 
 ```sh
-git clone https://github.com/gabrielePicco/er-usdc-scaling-poc.git
+git clone https://github.com/magicblock-labs/er-usdc-scaling-poc.git
 cd er-usdc-scaling-poc
 ./setup.sh        # fetches magicblock-validator (dev branch) + builds everything
 ./run.sh          # runs the 1→2→4 validator sweep, opens the live dashboard
@@ -46,19 +47,25 @@ Nothing is simulated — the benchmark drives the production delegation flow:
 5. Counts TPS **server-side** (transactions that entered processing minus
    sequencer/execution failures, from the validators' Prometheus endpoints)
    and verifies **balance conservation and activity for every pair** afterwards.
+6. Measures **end-to-end latency** while the load runs: each validator has a
+   reserved probe pair on which a transfer is sent every ~200ms *without*
+   `skipPreflight`, so the RPC responds only after execution — the HTTP
+   roundtrip is send → executed (queue wait + execution) under load.
 
 ## Measured results (Apple M5 Max, 18 cores)
 
-30s per point, 512 users (256 disjoint pairs) per shard, pre-signed load,
-every pair balance-verified:
+512 users (256 disjoint pairs) per shard, 1M pre-signed transfers per
+validator, every pair balance-verified. TPS is the server-side executed count;
+latency is send → executed from the probe transactions:
 
-| Validators | Aggregate TPS | Per-node TPS | Verified pairs |
-|-----------:|--------------:|-------------:|---------------:|
-| 1          | **105.3k**    | 105.3k       | 256/256 |
-| 2          | 129.3k        | 64.7k        | 512/512 |
-| 4          | 141.3k        | 35.3k        | 1024/1024 |
+| Validators | Aggregate TPS | Per-node TPS | Latency avg / p99 | Verified pairs |
+|-----------:|--------------:|-------------:|------------------:|---------------:|
+| 1          | **97.2k**     | 97.2k        | 39.5 / 131 ms     | 256/256 |
+| 2          | 132.8k        | 66.4k        | 42.9 / 123 ms     | 512/512 |
+| 4          | 135.4k        | 33.8k        | 54.2 / 179 ms     | 1024/1024 |
 
-**At the measured 105k TPS/node, 1M TPS ≈ 10 validators.**
+Single-node throughput sits at ~100k TPS (97–106k across runs on this
+machine). **At ~100k TPS/node, 1M TPS ≈ 10–11 validators.**
 
 Reading the plateau correctly: at N=1 the *validator* is the bottleneck (all
 executor threads busy, sequencer backpressure). At N≥2 the single benchmark
@@ -67,6 +74,38 @@ signing, HTTP, and 4 co-located validators contend for the same 18 cores.
 Per-node capacity on dedicated hardware is *at least* the single-validator
 number, and aggregate capacity is `N × per-node` because the validators share
 nothing.
+
+### End-to-end latency
+
+Latency is measured by probe transfers sent without `skipPreflight` while the
+load runs, so each sample is a full send → executed roundtrip:
+
+- **Light load: ~0.5 ms avg / 0.7 ms p99.** The execution path itself is
+  sub-millisecond.
+- **At saturation: ~35–70 ms avg.** That is queue wait, not execution — at
+  ~100k TPS an average latency of ~37 ms corresponds (Little's law) to ~3.7k
+  transactions in flight ahead of the probe in the ingestion + sequencer
+  pipeline. Push a validator to its throughput ceiling and latency is the
+  queue you chose to build; run it below the ceiling and transfers execute in
+  under a millisecond.
+
+### Platform notes
+
+These numbers come from a MacBook (Apple M5 Max) running stock
+`cargo build --release`. Production benchmarking and tuning will happen on a
+dedicated bare-metal Linux machine, which is expected to do better:
+
+- **A quiet, dedicated box.** macOS background services (`fseventsd`,
+  `syspolicyd`, Spotlight) measurably swung results by ~20% during these runs;
+  a dedicated Linux host has none of that, plus core pinning and a performance
+  governor.
+- **Linux-only code paths.** The engine's ledger applies `fadvise` access
+  hints only on Linux.
+- **Compiler tuning.** Build on the target machine with
+  `RUSTFLAGS="-C target-cpu=native"` and `lto`/`codegen-units = 1` in the
+  release profile. On Apple silicon `target-cpu=native` showed no measurable
+  gain (the default target already covers the M-series feature set); x86
+  servers have more to gain since baseline x86-64 codegen predates AVX2.
 
 ### Bottleneck decomposition (single validator)
 

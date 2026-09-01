@@ -16,6 +16,8 @@ pub struct ShardStats {
     pub errors: AtomicU64,
     /// Executed count scraped from the validator's Prometheus endpoint.
     pub executed: AtomicU64,
+    /// End-to-end latency samples (ms) from the probe transactions.
+    pub latency_ms: Mutex<Vec<f64>>,
 }
 
 impl ShardStats {
@@ -31,6 +33,26 @@ impl ShardStats {
     pub fn executed(&self) -> u64 {
         self.executed.load(Ordering::Relaxed)
     }
+    pub fn record_latency(&self, ms: f64) {
+        if let Ok(mut samples) = self.latency_ms.lock() {
+            samples.push(ms);
+        }
+    }
+    pub fn latency_samples(&self) -> Vec<f64> {
+        self.latency_ms.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+}
+
+/// (avg, p99) over a set of latency samples, if any.
+pub fn latency_summary(samples: &[f64]) -> Option<(f64, f64)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let avg = samples.iter().sum::<f64>() / samples.len() as f64;
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let p99 = sorted[((sorted.len() - 1) as f64 * 0.99) as usize];
+    Some((avg, p99))
 }
 
 #[derive(Clone, Serialize)]
@@ -50,6 +72,8 @@ pub struct SweepPoint {
     pub verified_pairs: usize,
     pub failed_pairs: usize,
     pub changed_pairs: usize,
+    pub latency_avg_ms: Option<f64>,
+    pub latency_p99_ms: Option<f64>,
 }
 
 #[derive(Clone, Serialize, Default)]

@@ -41,11 +41,16 @@ async fn stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
             shards
                 .iter()
                 .map(|s| {
+                    let samples = s.latency_samples();
+                    let latency = crate::stats::latency_summary(&samples);
                     json!({
                         "submitted": s.submitted(),
                         "accepted": s.accepted(),
                         "errors": s.errors(),
                         "executed": s.executed(),
+                        "latency_avg_ms": latency.map(|(avg, _)| avg),
+                        "latency_p99_ms": latency.map(|(_, p99)| p99),
+                        "latency_samples": samples.len(),
                     })
                 })
                 .collect()

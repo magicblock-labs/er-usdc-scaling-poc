@@ -29,6 +29,51 @@ impl Shard {
     pub fn pairs(&self) -> usize {
         self.users.len() / 2
     }
+    /// Pairs used by the bulk load; the last pair is reserved for the
+    /// end-to-end latency probe so probe transactions never queue behind
+    /// load transactions on the same accounts.
+    pub fn load_pairs(&self) -> usize {
+        (self.pairs() - 1).max(1)
+    }
+    fn probe_pair(&self) -> usize {
+        self.pairs() - 1
+    }
+}
+
+/// Measures end-to-end latency during load: every ~200ms sends one transfer
+/// on the shard's reserved probe pair without skipPreflight, so the RPC
+/// response returns only after the transaction has executed. The HTTP
+/// roundtrip is therefore queue wait + execution + notification.
+pub async fn latency_probe(
+    er_url: String,
+    shard: Arc<Shard>,
+    stats: Arc<ShardStats>,
+    stop: Arc<AtomicBool>,
+) {
+    let rpc = RpcClient::new_with_timeout(er_url, Duration::from_secs(30));
+    let p = shard.probe_pair();
+    let mut i: u64 = 0;
+    while !stop.load(Ordering::Relaxed) {
+        i += 1;
+        let Ok(blockhash) = rpc.get_latest_blockhash().await else {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        };
+        let (from_idx, src, dst) = if i % 2 == 0 {
+            (2 * p, shard.atas[2 * p], shard.atas[2 * p + 1])
+        } else {
+            (2 * p + 1, shard.atas[2 * p + 1], shard.atas[2 * p])
+        };
+        let amount = 1 + (i % 995);
+        let Ok(tx) = transfer_tx(&shard.users[from_idx], &src, &dst, amount, blockhash) else {
+            continue;
+        };
+        let start = Instant::now();
+        if rpc.send_transaction(&tx).await.is_ok() {
+            stats.record_latency(start.elapsed().as_secs_f64() * 1e3);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// Materializes every projected ATA on the ER (triggers cloning), sends one
@@ -163,7 +208,7 @@ pub async fn run_load(
     let receiver = Arc::new(tokio::sync::Mutex::new(tx_receiver));
 
     // Signer threads: each owns a disjoint slice of pairs.
-    let pairs = shard.pairs();
+    let pairs = shard.load_pairs();
     let threads = config.signer_threads.max(1).min(pairs);
     let mut signer_handles = Vec::new();
     for t in 0..threads {
@@ -307,7 +352,7 @@ pub async fn presign(
 ) -> Result<Arc<Vec<String>>> {
     let rpc = RpcClient::new_with_timeout(er_url, Duration::from_secs(10));
     let blockhash = rpc.get_latest_blockhash().await?;
-    let pairs = shard.pairs();
+    let pairs = shard.load_pairs();
     let threads = threads.max(1);
     tokio::task::spawn_blocking(move || {
         let stripes: Vec<Vec<String>> = std::thread::scope(|scope| {

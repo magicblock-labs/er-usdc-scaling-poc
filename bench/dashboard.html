@@ -115,6 +115,11 @@
       <div class="value" id="nodes-1m">&ndash;</div>
       <div class="sub">at measured per-node rate</div>
     </div>
+    <div class="tile">
+      <div class="label">E2E latency (avg)</div>
+      <div class="value" id="latency">&ndash;</div>
+      <div class="sub" id="latency-p99">send &rarr; executed, probe txs</div>
+    </div>
   </div>
 
   <div class="panel">
@@ -237,11 +242,13 @@ function drawSweep(sweep) {
 
   table.hidden = false;
   table.innerHTML = "<tr><th>Validators</th><th>TPS</th><th>Per-node TPS</th>" +
-    "<th>Scaling eff.</th><th>Executed (server)</th><th>Pairs verified</th><th>Pairs active</th></tr>" +
+    "<th>Scaling eff.</th><th>Executed (server)</th><th>Latency avg / p99</th><th>Pairs verified</th><th>Pairs active</th></tr>" +
     sweep.map(p => `<tr><td>${p.validators}</td><td>${fmt(p.tps)}</td>` +
       `<td>${fmt(p.per_node_tps)}</td>` +
       `<td>${(p.tps / (base * p.validators) * 100).toFixed(0)}%</td>` +
       `<td>${p.executed == null ? "n/a" : fmt(p.executed)}</td>` +
+      `<td>${p.latency_avg_ms == null ? "n/a"
+        : p.latency_avg_ms.toFixed(1) + " / " + p.latency_p99_ms.toFixed(1) + " ms"}</td>` +
       `<td class="${p.failed_pairs ? "err" : "ok"}">${p.verified_pairs}/${p.verified_pairs + p.failed_pairs}</td>` +
       `<td>${p.changed_pairs}</td></tr>`).join("");
 }
@@ -271,6 +278,17 @@ async function tick() {
     document.getElementById("per-node").textContent = bestPerNode ? fmt(bestPerNode) : "–";
     document.getElementById("nodes-1m").textContent =
       bestPerNode ? "~" + Math.ceil(1e6 / bestPerNode) : "–";
+    const latShards = s.shards.filter(x => x.latency_avg_ms != null);
+    const latSamples = latShards.reduce((a, x) => a + x.latency_samples, 0);
+    const latAvg = latSamples
+      ? latShards.reduce((a, x) => a + x.latency_avg_ms * x.latency_samples, 0) / latSamples : 0;
+    const latP99 = latShards.length
+      ? Math.max(...latShards.map(x => x.latency_p99_ms)) : 0;
+    document.getElementById("latency").textContent =
+      latSamples ? latAvg.toFixed(1) + " ms" : "–";
+    document.getElementById("latency-p99").textContent = latSamples
+      ? `p99 ${latP99.toFixed(1)} ms · send → executed`
+      : "send → executed, probe txs";
     const cores = s.cores || navigator.hardwareConcurrency || 0;
     const aggNow = running ? current
       : (s.history.length ? Math.max(...s.history.map(p => p.aggregate_tps)) : 0);
@@ -287,6 +305,7 @@ async function tick() {
       return `<div class="card"><div class="name">er-${i}</div>` +
         `<div class="tps">${shown ? fmt(shown) : "–"} <span style="font-size:12px;color:var(--muted)">${label}</span></div>` +
         `<div class="meta">${fmt(x.accepted)} accepted` +
+        (x.latency_avg_ms != null ? ` · ${x.latency_avg_ms.toFixed(1)}ms avg` : "") +
         (x.errors ? ` · <span class="err">${fmt(x.errors)} err</span>` : "") + `</div></div>`;
     }).join("") + machineCard;
     lastHistory = s.history; lastSweep = s.sweep;
