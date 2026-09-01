@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ER 1M TPS Bench</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;
+    --good: #0ca30c;
+    --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --good: #0ca30c;
+      --critical: #d03b3b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  h1 { font-size: 20px; font-weight: 650; margin: 0; }
+  .phase {
+    font-size: 12px; color: var(--ink-2); border: 1px solid var(--border);
+    background: var(--surface-1); border-radius: 999px; padding: 3px 10px;
+  }
+  .phase b { color: var(--series-1); font-weight: 650; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .tile .value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; }
+  .tile.hero .value { font-size: 40px; color: var(--series-1); }
+  .tile.hero .value.idle { font-size: 22px; color: var(--muted); line-height: 2.1; }
+  .tile .sub { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 12px;
+  }
+  .panel h2 { font-size: 13px; font-weight: 650; color: var(--ink-2); margin: 0 0 10px; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+  .legend .key { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  svg text { fill: var(--muted); font: 11px system-ui, sans-serif; }
+  svg .tab { font-variant-numeric: tabular-nums; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .card .name { font-size: 12px; color: var(--muted); }
+  .card .tps { font-size: 20px; font-weight: 650; }
+  .card .meta { font-size: 12px; color: var(--ink-2); }
+  .err { color: var(--critical); }
+  .ok { color: var(--good); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 14px; }
+  .tooltip {
+    position: fixed; pointer-events: none; display: none; z-index: 10;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; color: var(--ink); box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Ephemeral Rollups &mdash; USDC transfer throughput</h1>
+    <span class="phase" id="phase">connecting&hellip;</span>
+  </header>
+
+  <div class="tiles">
+    <div class="tile hero">
+      <div class="label">Aggregate TPS (live)</div>
+      <div class="value" id="tps">&ndash;</div>
+      <div class="sub" id="run-info"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Transfers accepted</div>
+      <div class="value" id="accepted">&ndash;</div>
+      <div class="sub" id="errors"></div>
+    </div>
+    <div class="tile">
+      <div class="label">Best per-validator TPS</div>
+      <div class="value" id="per-node">&ndash;</div>
+      <div class="sub">measured on this machine</div>
+    </div>
+    <div class="tile">
+      <div class="label">Validators for 1M TPS</div>
+      <div class="value" id="nodes-1m">&ndash;</div>
+      <div class="sub">at measured per-node rate</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Live throughput</h2>
+    <div class="legend">
+      <span><span class="key" style="background:var(--series-1)"></span>aggregate</span>
+      <span><span class="key" style="background:var(--baseline)"></span>per validator</span>
+    </div>
+    <svg id="live" width="100%" height="220" viewBox="0 0 1060 220" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="panel">
+    <h2>Horizontal scaling &mdash; aggregate TPS by validator count</h2>
+    <div class="legend">
+      <span><span class="key" style="background:var(--series-1)"></span>measured</span>
+      <span><span class="key" style="background:var(--baseline); height:0; border-top:2px dashed var(--muted)"></span>linear ideal (N &times; single-node)</span>
+    </div>
+    <svg id="sweep" width="100%" height="220" viewBox="0 0 1060 220"></svg>
+    <table id="sweep-table" hidden></table>
+  </div>
+
+  <div class="panel">
+    <h2>Validators</h2>
+    <div class="cards" id="cards"></div>
+  </div>
+
+  <p class="note">
+    All numbers are end-to-end: signed SPL-token transfers of delegated USDC
+    (eATA&nbsp;&rarr;&nbsp;projected ATA) submitted over JSON-RPC
+    <code>sendTransaction</code>. Validators here share one machine and contend
+    for cores, so per-node TPS on dedicated hardware is at least the measured
+    value; ephemeral validators share no state or consensus, so aggregate
+    capacity scales with validator count for intra-shard traffic. Transfers
+    across shards remain possible through Solana: state settles to the base
+    layer, where funds move between rollups via commit&nbsp;+&nbsp;redelegation.
+  </p>
+</div>
+<div class="tooltip" id="tip"></div>
+
+<script>
+const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + "M"
+  : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : Math.round(n).toString();
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+let lastHistory = [], lastSweep = [];
+
+function drawLive(history, shards) {
+  const svg = document.getElementById("live");
+  const W = 1060, H = 220, padL = 46, padB = 20, padT = 10;
+  if (!history.length) { svg.innerHTML = ""; return; }
+  const tMin = history[0].t, tMax = Math.max(history[history.length - 1].t, tMin + 1);
+  const yMax = Math.max(10, ...history.map(p => p.aggregate_tps)) * 1.1;
+  const x = t => padL + (t - tMin) / (tMax - tMin) * (W - padL - 8);
+  const y = v => padT + (1 - v / yMax) * (H - padT - padB);
+  let out = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = yMax / 4 * g, yy = y(v);
+    out += `<line x1="${padL}" y1="${yy}" x2="${W - 8}" y2="${yy}" stroke="${css("--grid")}" stroke-width="1"/>`;
+    out += `<text class="tab" x="${padL - 6}" y="${yy + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  const nShards = shards.length;
+  if (nShards > 1) {
+    for (let s = 0; s < nShards; s++) {
+      const pts = history.map(p => `${x(p.t)},${y(p.per_shard[s] || 0)}`).join(" ");
+      out += `<polyline points="${pts}" fill="none" stroke="${css("--baseline")}" stroke-width="1.5"/>`;
+    }
+  }
+  const pts = history.map(p => `${x(p.t)},${y(p.aggregate_tps)}`).join(" ");
+  out += `<polyline points="${pts}" fill="none" stroke="${css("--series-1")}" stroke-width="2"/>`;
+  out += `<line x1="${padL}" y1="${y(0)}" x2="${W - 8}" y2="${y(0)}" stroke="${css("--baseline")}" stroke-width="1"/>`;
+  svg.innerHTML = out;
+}
+
+// Crosshair + tooltip on the live chart.
+const live = document.getElementById("live"), tip = document.getElementById("tip");
+live.addEventListener("mousemove", (ev) => {
+  if (!lastHistory.length) return;
+  const rect = live.getBoundingClientRect();
+  const frac = (ev.clientX - rect.left) / rect.width;
+  const tMin = lastHistory[0].t, tMax = lastHistory[lastHistory.length - 1].t;
+  const t = tMin + Math.max(0, Math.min(1, (frac * 1060 - 46) / (1060 - 54))) * (tMax - tMin);
+  let best = lastHistory[0];
+  for (const p of lastHistory) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+  tip.style.display = "block";
+  tip.style.left = (ev.clientX + 14) + "px";
+  tip.style.top = (ev.clientY + 10) + "px";
+  tip.innerHTML = `t=${best.t.toFixed(1)}s &middot; <b>${fmt(best.aggregate_tps)} TPS</b>` +
+    (best.per_shard.length > 1
+      ? "<br>" + best.per_shard.map((v, i) => `er-${i}: ${fmt(v)}`).join(" &middot; ")
+      : "");
+});
+live.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+
+function drawSweep(sweep) {
+  const svg = document.getElementById("sweep");
+  const table = document.getElementById("sweep-table");
+  if (!sweep.length) { svg.innerHTML = ""; table.hidden = true; return; }
+  const W = 1060, H = 220, padL = 46, padB = 26, padT = 12;
+  const base = sweep[0].per_node_tps;
+  const yMax = Math.max(...sweep.map(p => p.tps), base * sweep[sweep.length - 1].validators) * 1.15;
+  const y = v => padT + (1 - v / yMax) * (H - padT - padB);
+  const slot = (W - padL - 20) / sweep.length;
+  let out = "";
+  for (let g = 0; g <= 4; g++) {
+    const v = yMax / 4 * g, yy = y(v);
+    out += `<line x1="${padL}" y1="${yy}" x2="${W - 8}" y2="${yy}" stroke="${css("--grid")}" stroke-width="1"/>`;
+    out += `<text class="tab" x="${padL - 6}" y="${yy + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  const ideal = sweep.map((p, i) =>
+    `${padL + slot * i + slot / 2},${y(base * p.validators)}`).join(" ");
+  out += `<polyline points="${ideal}" fill="none" stroke="${css("--muted")}" stroke-width="2" stroke-dasharray="5 4"/>`;
+  sweep.forEach((p, i) => {
+    const cx = padL + slot * i + slot / 2, bw = Math.min(64, slot * 0.5);
+    out += `<rect x="${cx - bw / 2}" y="${y(p.tps)}" width="${bw}" height="${y(0) - y(p.tps)}" rx="4" fill="${css("--series-1")}"/>`;
+    out += `<text class="tab" x="${cx}" y="${y(p.tps) - 6}" text-anchor="middle" style="fill:${css("--ink-2")}">${fmt(p.tps)}</text>`;
+    out += `<text x="${cx}" y="${H - 8}" text-anchor="middle">${p.validators} validator${p.validators > 1 ? "s" : ""}</text>`;
+  });
+  out += `<line x1="${padL}" y1="${y(0)}" x2="${W - 8}" y2="${y(0)}" stroke="${css("--baseline")}" stroke-width="1"/>`;
+  svg.innerHTML = out;
+
+  table.hidden = false;
+  table.innerHTML = "<tr><th>Validators</th><th>TPS</th><th>Per-node TPS</th>" +
+    "<th>Scaling eff.</th><th>Executed (server)</th><th>Pairs verified</th><th>Pairs active</th></tr>" +
+    sweep.map(p => `<tr><td>${p.validators}</td><td>${fmt(p.tps)}</td>` +
+      `<td>${fmt(p.per_node_tps)}</td>` +
+      `<td>${(p.tps / (base * p.validators) * 100).toFixed(0)}%</td>` +
+      `<td>${p.executed == null ? "n/a" : fmt(p.executed)}</td>` +
+      `<td class="${p.failed_pairs ? "err" : "ok"}">${p.verified_pairs}/${p.verified_pairs + p.failed_pairs}</td>` +
+      `<td>${p.changed_pairs}</td></tr>`).join("");
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/stats");
+    const s = await r.json();
+    document.getElementById("phase").innerHTML =
+      `<b>${s.info.phase || "idle"}</b> ${s.info.detail || ""}`;
+    document.getElementById("run-info").textContent = s.info.validators
+      ? `${s.info.validators} validator(s) · ${s.info.total_delegated_accounts} delegated accounts`
+      : "";
+    const accepted = s.shards.reduce((a, x) => a + x.accepted, 0);
+    const errors = s.shards.reduce((a, x) => a + x.errors, 0);
+    document.getElementById("accepted").textContent = fmt(accepted);
+    document.getElementById("errors").innerHTML = errors
+      ? `<span class="err">${fmt(errors)} errors</span>` : "no errors";
+    const running = s.info.phase === "load";
+    const current = s.history.length ? s.history[s.history.length - 1].aggregate_tps : 0;
+    const tpsEl = document.getElementById("tps");
+    tpsEl.textContent = running ? fmt(current) : "not running";
+    tpsEl.classList.toggle("idle", !running);
+    const bestPerNode = Math.max(0, ...s.sweep.map(p => p.per_node_tps),
+      s.history.length && s.info.validators
+        ? Math.max(...s.history.map(p => p.aggregate_tps)) / s.info.validators : 0);
+    document.getElementById("per-node").textContent = bestPerNode ? fmt(bestPerNode) : "–";
+    document.getElementById("nodes-1m").textContent =
+      bestPerNode ? "~" + Math.ceil(1e6 / bestPerNode) : "–";
+    const cores = s.cores || navigator.hardwareConcurrency || 0;
+    const aggNow = running ? current
+      : (s.history.length ? Math.max(...s.history.map(p => p.aggregate_tps)) : 0);
+    const machineCard = cores ? `<div class="card"><div class="name">machine</div>` +
+      `<div class="tps">${cores} <span style="font-size:12px;color:var(--muted)">cores</span></div>` +
+      `<div class="meta">${aggNow ? "~" + fmt(aggNow / cores) + " TPS/core" +
+        (running ? "" : " (peak)") : "–"}</div></div>` : "";
+    document.getElementById("cards").innerHTML = s.shards.map((x, i) => {
+      const live = s.history.length ? s.history[s.history.length - 1].per_shard[i] || 0 : 0;
+      const peak = s.history.length
+        ? Math.max(...s.history.map(p => p.per_shard[i] || 0)) : 0;
+      const shown = running ? live : peak;
+      const label = running ? "TPS" : "peak TPS";
+      return `<div class="card"><div class="name">er-${i}</div>` +
+        `<div class="tps">${shown ? fmt(shown) : "–"} <span style="font-size:12px;color:var(--muted)">${label}</span></div>` +
+        `<div class="meta">${fmt(x.accepted)} accepted` +
+        (x.errors ? ` · <span class="err">${fmt(x.errors)} err</span>` : "") + `</div></div>`;
+    }).join("") + machineCard;
+    lastHistory = s.history; lastSweep = s.sweep;
+    drawLive(s.history, s.shards);
+    drawSweep(s.sweep);
+  } catch (e) { /* bench not up yet */ }
+}
+setInterval(tick, 600);
+tick();
+</script>
+</body>
+</html>

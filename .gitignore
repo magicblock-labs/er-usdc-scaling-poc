@@ -1,0 +1,5 @@
+/bench/target
+/.run
+/magicblock-validator
+*.log
+results.json
