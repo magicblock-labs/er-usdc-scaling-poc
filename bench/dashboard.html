@@ -113,7 +113,7 @@
     <div class="tile">
       <div class="label">Validators for 1M TPS</div>
       <div class="value" id="nodes-1m">&ndash;</div>
-      <div class="sub">at measured per-node rate</div>
+      <div class="sub" id="nodes-1m-sub">at measured per-node rate</div>
     </div>
     <div class="tile">
       <div class="label">E2E latency (avg)</div>
@@ -278,6 +278,10 @@ async function tick() {
     document.getElementById("per-node").textContent = bestPerNode ? fmt(bestPerNode) : "–";
     document.getElementById("nodes-1m").textContent =
       bestPerNode ? "~" + Math.ceil(1e6 / bestPerNode) : "–";
+    const bestAggregate = Math.max(0, ...s.sweep.map(p => p.tps));
+    document.getElementById("nodes-1m-sub").textContent = bestAggregate
+      ? `at measured per-node rate · ≈ ${Math.ceil(1e6 / bestAggregate)} machine${Math.ceil(1e6 / bestAggregate) > 1 ? "s" : ""} like this one`
+      : "at measured per-node rate";
     const latShards = s.shards.filter(x => x.latency_avg_ms != null);
     const latSamples = latShards.reduce((a, x) => a + x.latency_samples, 0);
     const latAvg = latSamples
