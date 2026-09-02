@@ -8,8 +8,6 @@ validators share no state and no consensus, so capacity is additive:
 **1M TPS ≈ two such machines** (roughly 13 validators at the measured
 86%-efficiency operating point), sharded by payment cohort.
 
-![Bare-metal dashboard](docs/dashboard-linux.jpg)
-
 ## Quickstart
 
 ```sh
@@ -178,7 +176,7 @@ Results are also written to `results.json`. The dashboard page
 setup.sh, run.sh          entry points
 bench/                    the benchmark binary (Rust) + dashboard.html
 magicblock-validator/     validator checkout (dev branch), created by setup.sh
-docs/                     dashboard captures (bare-metal + laptop)
+docs/                     dashboard screenshot
 .run/, results.json       run artifacts (gitignored)
 ```
 
